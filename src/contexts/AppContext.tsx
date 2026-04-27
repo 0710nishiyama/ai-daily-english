@@ -68,6 +68,8 @@ export interface UserSettings {
   showJapanese: boolean;
   difficultyLevel: DifficultyLevel;
   monthlyLessonLimit: number;
+  /** 選択された音声名（nullの場合は自動選択） */
+  selectedVoiceName: string | null;
 }
 
 /** アプリケーション全体の状態 */
@@ -122,6 +124,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   showJapanese: true,
   difficultyLevel: 'beginner',
   monthlyLessonLimit: 0,
+  selectedVoiceName: null,
 };
 
 function createInitialState(): AppState {

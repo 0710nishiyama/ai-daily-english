@@ -754,8 +754,9 @@ export function LessonPage({
     recognizerRef.current = recognizer;
     synthesizerRef.current = synthesizer;
 
-    // Set initial rate from settings
+    // Set initial rate and voice from settings
     synthesizer.setRate(state.settings.speechRate);
+    synthesizer.setVoice(state.settings.selectedVoiceName);
 
     // Register callbacks
     recognizer.onStateChange((s) => setRecognitionState(s));
@@ -768,6 +769,14 @@ export function LessonPage({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sync voice and rate settings when they change
+  useEffect(() => {
+    if (synthesizerRef.current) {
+      synthesizerRef.current.setRate(state.settings.speechRate);
+      synthesizerRef.current.setVoice(state.settings.selectedVoiceName);
+    }
+  }, [state.settings.speechRate, state.settings.selectedVoiceName]);
 
   // Sync lesson phase from context
   useEffect(() => {
@@ -792,6 +801,9 @@ export function LessonPage({
   /** シーン選択 → レッスン開始 */
   const handleSelectScene = useCallback(
     async (sceneId: string) => {
+      // ユーザーのクリック直後に音声合成をアンロック（自動再生ポリシー対策）
+      synthesizerRef.current?.unlock();
+
       dispatch({ type: 'SET_ERROR', error: null });
       setHint(null);
       setQuiz(null);
@@ -833,6 +845,9 @@ export function LessonPage({
 
   /** マイクトグル */
   const handleMicToggle = useCallback(() => {
+    // ユーザーのクリック直後に音声合成をアンロック（自動再生ポリシー対策）
+    synthesizerRef.current?.unlock();
+
     const rec = recognizerRef.current;
     if (!rec) return;
 
@@ -893,6 +908,9 @@ export function LessonPage({
   /** テキスト送信 */
   const handleSendText = useCallback(
     async (text: string) => {
+      // ユーザーのクリック直後に音声合成をアンロック（自動再生ポリシー対策）
+      synthesizerRef.current?.unlock();
+
       try {
         const aiTurn = await sendMessage(text);
 

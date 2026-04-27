@@ -7,8 +7,9 @@
  * Requirements: 1.1, 1.2, 1.3, 1.4, 1.6, 1.7, 12.1, 12.2
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useApp } from '../contexts/AppContext';
+import { SpeechSynthesizer } from '../infra/SpeechSynthesizer';
 import type { AIProvider, ConnectionTestResult, CostEstimate } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -131,10 +132,34 @@ export function SettingsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // 設定値
-  const { speechRate, showHints, showJapanese } = state.settings;
+  const { speechRate, showHints, showJapanese, selectedVoiceName } = state.settings;
 
   // コスト推定
   const cost = getEstimatedCost(selectedProvider);
+
+  // 音声一覧の取得（ブラウザの音声読み込みは非同期のため、stateで管理）
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [previewSynthesizer] = useState(() => new SpeechSynthesizer());
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis
+        .getVoices()
+        .filter((v) => v.lang.startsWith('en-US') || v.lang.startsWith('en-'));
+      setAvailableVoices(voices);
+    };
+
+    // 一部ブラウザでは voiceschanged イベントで音声が読み込まれる
+    loadVoices();
+    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
+
+    return () => {
+      window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
+      previewSynthesizer.dispose();
+    };
+  }, [previewSynthesizer]);
 
   // -----------------------------------------------------------------------
   // Handlers
@@ -218,6 +243,25 @@ export function SettingsPage() {
       dispatch({ type: 'UPDATE_SETTINGS', settings: { showJapanese: show } });
     },
     [dispatch],
+  );
+
+  /** 音声変更 */
+  const handleVoiceChange = useCallback(
+    (voiceName: string) => {
+      const value = voiceName === '' ? null : voiceName;
+      dispatch({ type: 'UPDATE_SETTINGS', settings: { selectedVoiceName: value } });
+    },
+    [dispatch],
+  );
+
+  /** 音声プレビュー */
+  const handleVoicePreview = useCallback(
+    (voiceName: string | null) => {
+      previewSynthesizer.setVoice(voiceName);
+      previewSynthesizer.setRate(speechRate);
+      previewSynthesizer.speak('Hello! How are you doing today? Welcome to AI Daily English.');
+    },
+    [previewSynthesizer, speechRate],
   );
 
   // -----------------------------------------------------------------------
@@ -378,6 +422,47 @@ export function SettingsPage() {
           </div>
           <p className="mt-1 text-xs text-gray-500">
             AI音声の再生速度を調整します（0.5x〜1.5x）
+          </p>
+        </div>
+
+        {/* 音声選択 */}
+        <div className="mb-6">
+          <label
+            htmlFor="voice-select"
+            className="mb-2 block text-sm font-medium text-gray-700"
+          >
+            音声
+          </label>
+          {availableVoices.length > 0 ? (
+            <div className="flex gap-2">
+              <select
+                id="voice-select"
+                value={selectedVoiceName ?? ''}
+                onChange={(e) => handleVoiceChange(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">自動選択（おすすめ）</option>
+                {availableVoices.map((voice) => (
+                  <option key={voice.name} value={voice.name}>
+                    {voice.name} ({voice.lang})
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => handleVoicePreview(selectedVoiceName)}
+                className="shrink-0 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+                aria-label="音声をプレビュー"
+              >
+                ▶ 試聴
+              </button>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">
+              利用可能な英語音声がありません
+            </p>
+          )}
+          <p className="mt-1 text-xs text-gray-500">
+            AIの返答を読み上げる音声を選択します
           </p>
         </div>
 

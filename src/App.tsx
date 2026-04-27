@@ -18,6 +18,7 @@ import { EvaluationPage } from './components/EvaluationPage';
 import { SettingsPage } from './components/SettingsPage';
 import { ProgressPage } from './components/ProgressPage';
 import { AuthPage } from './components/AuthPage';
+import { SpeechSynthesizer } from './infra/SpeechSynthesizer';
 
 // ---------------------------------------------------------------------------
 // APIキーガード付きレッスンラッパー
@@ -110,6 +111,11 @@ function HomePageWithNavigation() {
         navigate('/settings');
         return;
       }
+
+      // ユーザーのクリック直後に音声合成をアンロック（自動再生ポリシー対策）
+      const synth = new SpeechSynthesizer();
+      synth.unlock();
+      synth.dispose();
 
       try {
         // レッスンを開始してからレッスン画面に遷移

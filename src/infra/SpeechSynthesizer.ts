@@ -55,9 +55,28 @@ export class SpeechSynthesizer {
   private speaking: boolean = false;
   private readonly supported: boolean;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private unlocked: boolean = false;
+  /** ユーザーが選択した音声名（nullの場合は自動選択） */
+  private selectedVoiceName: string | null = null;
 
   constructor() {
     this.supported = isSpeechSynthesisSupported();
+  }
+
+  /**
+   * ブラウザの自動再生ポリシーを解除するためのウォームアップ呼び出し。
+   * ユーザーのクリックイベントハンドラ内（async処理の前）で呼び出すこと。
+   * 空の発話を即座にキャンセルすることで、以降の speak() が許可される。
+   */
+  unlock(): void {
+    if (!this.supported || this.unlocked) return;
+    const utterance = new SpeechSynthesisUtterance('');
+    utterance.volume = 0;
+    utterance.rate = 1;
+    utterance.lang = 'en-US';
+    window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.cancel();
+    this.unlocked = true;
   }
 
   /**
@@ -169,6 +188,24 @@ export class SpeechSynthesizer {
   }
 
   /**
+   * 使用する音声を名前で指定する。
+   * nullを指定すると自動選択に戻る。
+   *
+   * @param voiceName 音声名（SpeechSynthesisVoice.name）、またはnull
+   */
+  setVoice(voiceName: string | null): void {
+    this.selectedVoiceName = voiceName;
+  }
+
+  /**
+   * 現在選択されている音声名を取得する。
+   * nullの場合は自動選択。
+   */
+  getVoiceName(): string | null {
+    return this.selectedVoiceName;
+  }
+
+  /**
    * 現在音声を再生中かどうかを返す。
    */
   isSpeaking(): boolean {
@@ -211,21 +248,59 @@ export class SpeechSynthesizer {
 
   /**
    * 利用可能な英語音声から最適な音声を選択する。
-   * en-US を優先し、見つからない場合は en- で始まる音声を返す。
+   *
+   * 選択優先順位:
+   * 1. ユーザーが明示的に選択した音声（selectedVoiceName）
+   * 2. 高品質な en-US 音声（名前に "Google", "Samantha", "Daniel", "Karen", "Moira" 等を含む）
+   * 3. その他の en-US 音声
+   * 4. en- で始まる任意の音声
    */
   private selectEnglishVoice(): SpeechSynthesisVoice | null {
     if (!this.supported) return null;
 
     const voices = window.speechSynthesis.getVoices();
 
-    // en-US の音声を優先
-    const usVoice = voices.find((v) => v.lang === 'en-US');
+    // 1. ユーザーが選択した音声を優先
+    if (this.selectedVoiceName) {
+      const selected = voices.find((v) => v.name === this.selectedVoiceName);
+      if (selected) return selected;
+    }
+
+    // 英語音声のみフィルタ
+    const englishVoices = voices.filter(
+      (v) => v.lang === 'en-US' || v.lang.startsWith('en-'),
+    );
+
+    if (englishVoices.length === 0) return null;
+
+    // 2. 高品質な音声を優先（ブラウザ/OS固有の良質な音声名）
+    const preferredNames = [
+      'Google US English',
+      'Google UK English Female',
+      'Google UK English Male',
+      'Samantha',       // macOS / iOS - 女性、自然な声
+      'Daniel',         // macOS / iOS - 男性（英国英語）
+      'Karen',          // macOS / iOS - 女性（オーストラリア英語）
+      'Moira',          // macOS / iOS - 女性（アイルランド英語）
+      'Alex',           // macOS - 男性
+      'Tessa',          // macOS - 女性（南アフリカ英語）
+      'Microsoft Zira',  // Windows - 女性
+      'Microsoft David', // Windows - 男性
+      'Microsoft Mark',  // Windows - 男性
+    ];
+
+    for (const name of preferredNames) {
+      const voice = englishVoices.find((v) =>
+        v.name.toLowerCase().includes(name.toLowerCase()),
+      );
+      if (voice) return voice;
+    }
+
+    // 3. en-US を優先
+    const usVoice = englishVoices.find((v) => v.lang === 'en-US');
     if (usVoice) return usVoice;
 
-    // en- で始まる音声にフォールバック
-    const enVoice = voices.find((v) => v.lang.startsWith('en-'));
-    if (enVoice) return enVoice;
-
-    return null;
+    // 4. 任意の英語音声
+    return englishVoices[0];
   }
 }
