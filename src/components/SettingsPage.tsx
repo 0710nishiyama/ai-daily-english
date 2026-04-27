@@ -141,6 +141,16 @@ export function SettingsPage() {
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [previewSynthesizer] = useState(() => new SpeechSynthesizer());
 
+  // マイクデバイス関連の状態
+  const [micDevices, setMicDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState<string>(
+    state.settings.selectedMicDeviceId ?? '',
+  );
+  const [micTestState, setMicTestState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+  const [micTestLevel, setMicTestLevel] = useState(0);
+  const [micTestError, setMicTestError] = useState<string | null>(null);
+  const [micTestStream, setMicTestStream] = useState<MediaStream | null>(null);
+
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
@@ -160,6 +170,38 @@ export function SettingsPage() {
       previewSynthesizer.dispose();
     };
   }, [previewSynthesizer]);
+
+  // マイクデバイス一覧の取得
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices) return;
+
+    const loadDevices = async () => {
+      try {
+        // デバイス一覧を取得するにはまず権限が必要な場合がある
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter((d) => d.kind === 'audioinput');
+        setMicDevices(audioInputs);
+      } catch {
+        // 権限がない場合は空のまま
+      }
+    };
+
+    loadDevices();
+    navigator.mediaDevices.addEventListener('devicechange', loadDevices);
+
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', loadDevices);
+    };
+  }, []);
+
+  // マイクテスト停止時のクリーンアップ
+  useEffect(() => {
+    return () => {
+      if (micTestStream) {
+        micTestStream.getTracks().forEach((t) => t.stop());
+      }
+    };
+  }, [micTestStream]);
 
   // -----------------------------------------------------------------------
   // Handlers
@@ -263,6 +305,109 @@ export function SettingsPage() {
     },
     [previewSynthesizer, speechRate],
   );
+
+  /** マイクデバイス変更 */
+  const handleMicChange = useCallback(
+    (deviceId: string) => {
+      setSelectedMicId(deviceId);
+      const value = deviceId === '' ? null : deviceId;
+      dispatch({ type: 'UPDATE_SETTINGS', settings: { selectedMicDeviceId: value } });
+    },
+    [dispatch],
+  );
+
+  /** マイクテスト開始 */
+  const handleMicTest = useCallback(async () => {
+    // 既存のテストストリームを停止
+    if (micTestStream) {
+      micTestStream.getTracks().forEach((t) => t.stop());
+      setMicTestStream(null);
+    }
+
+    setMicTestState('testing');
+    setMicTestError(null);
+    setMicTestLevel(0);
+
+    try {
+      const constraints: MediaStreamConstraints = {
+        audio: selectedMicId
+          ? { deviceId: { exact: selectedMicId } }
+          : true,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setMicTestStream(stream);
+
+      // デバイス一覧を再取得（権限取得後にラベルが表示される）
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter((d) => d.kind === 'audioinput');
+      setMicDevices(audioInputs);
+
+      // AudioContext で音量レベルを取得
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      let animationId: number;
+      let peakDetected = false;
+
+      const checkLevel = () => {
+        analyser.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((sum, v) => sum + v, 0) / dataArray.length;
+        const normalized = Math.min(100, Math.round((avg / 128) * 100));
+        setMicTestLevel(normalized);
+
+        if (normalized > 5) {
+          peakDetected = true;
+        }
+
+        animationId = requestAnimationFrame(checkLevel);
+      };
+
+      checkLevel();
+
+      // 3秒後にテスト終了
+      setTimeout(() => {
+        cancelAnimationFrame(animationId);
+        source.disconnect();
+        audioContext.close();
+        stream.getTracks().forEach((t) => t.stop());
+        setMicTestStream(null);
+        setMicTestState(peakDetected ? 'success' : 'error');
+        if (!peakDetected) {
+          setMicTestError('音声が検出されませんでした。マイクに向かって話してみてください。');
+        }
+        // 3秒後にリセット
+        setTimeout(() => {
+          setMicTestState('idle');
+          setMicTestLevel(0);
+          setMicTestError(null);
+        }, 3000);
+      }, 3000);
+    } catch (err) {
+      setMicTestState('error');
+      if (err instanceof DOMException && err.name === 'NotAllowedError') {
+        setMicTestError('マイクへのアクセスが拒否されました。ブラウザの設定でマイクを許可してください。');
+      } else if (err instanceof DOMException && err.name === 'NotFoundError') {
+        setMicTestError('マイクが見つかりません。マイクが接続されているか確認してください。');
+      } else {
+        setMicTestError('マイクのテストに失敗しました。');
+      }
+    }
+  }, [selectedMicId, micTestStream]);
+
+  /** マイクテスト停止 */
+  const handleMicTestStop = useCallback(() => {
+    if (micTestStream) {
+      micTestStream.getTracks().forEach((t) => t.stop());
+      setMicTestStream(null);
+    }
+    setMicTestState('idle');
+    setMicTestLevel(0);
+  }, [micTestStream]);
 
   // -----------------------------------------------------------------------
   // Render
@@ -516,6 +661,120 @@ export function SettingsPage() {
               }`}
             />
           </button>
+        </div>
+      </section>
+
+      {/* ===== マイク設定セクション ===== */}
+      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <h2 className="mb-4 text-lg font-semibold text-gray-900">
+          マイク設定
+        </h2>
+
+        {/* マイクデバイス選択 */}
+        <div className="mb-6">
+          <label
+            htmlFor="mic-select"
+            className="mb-2 block text-sm font-medium text-gray-700"
+          >
+            入力デバイス
+          </label>
+          <select
+            id="mic-select"
+            value={selectedMicId}
+            onChange={(e) => handleMicChange(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="">デフォルト（システム設定）</option>
+            {micDevices.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `マイク ${device.deviceId.slice(0, 8)}...`}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            音声認識に使用するマイクを選択します
+          </p>
+          {micDevices.length === 0 && (
+            <p className="mt-2 text-xs text-amber-600">
+              マイクが検出されていません。「マイクテスト」ボタンを押すとブラウザがマイクの使用許可を求めます。
+            </p>
+          )}
+        </div>
+
+        {/* マイクテスト */}
+        <div className="mb-4">
+          <div className="flex items-center gap-3">
+            {micTestState === 'testing' ? (
+              <button
+                onClick={handleMicTestStop}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700"
+              >
+                ■ テスト停止
+              </button>
+            ) : (
+              <button
+                onClick={handleMicTest}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+              >
+                🎤 マイクテスト
+              </button>
+            )}
+
+            {micTestState === 'success' && (
+              <span className="flex items-center gap-1.5 text-sm text-green-600">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                マイクは正常に動作しています
+              </span>
+            )}
+          </div>
+
+          {/* 音量レベルバー */}
+          {micTestState === 'testing' && (
+            <div className="mt-3">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-xs text-gray-500">入力レベル</span>
+                <span className="text-xs text-gray-500">
+                  {micTestLevel > 0 ? '音声を検出中...' : 'マイクに向かって話してください'}
+                </span>
+              </div>
+              <div className="h-3 w-full overflow-hidden rounded-full bg-gray-200">
+                <div
+                  className={`h-full rounded-full transition-all duration-100 ${
+                    micTestLevel > 60
+                      ? 'bg-green-500'
+                      : micTestLevel > 30
+                        ? 'bg-yellow-500'
+                        : micTestLevel > 5
+                          ? 'bg-blue-500'
+                          : 'bg-gray-300'
+                  }`}
+                  style={{ width: `${micTestLevel}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* エラーメッセージ */}
+          {micTestError && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+              <svg className="mt-0.5 h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              <span>{micTestError}</span>
+            </div>
+          )}
+        </div>
+
+        {/* マイク使用のヒント */}
+        <div className="rounded-lg bg-blue-50 p-4">
+          <h4 className="mb-1 text-sm font-medium text-blue-800">💡 マイクのヒント</h4>
+          <ul className="space-y-1 text-xs text-blue-700">
+            <li>• 静かな環境で使用すると認識精度が上がります</li>
+            <li>• マイクから20〜30cm程度の距離で話すのが最適です</li>
+            <li>• 外付けマイクやヘッドセットを使うとより正確に認識されます</li>
+          </ul>
         </div>
       </section>
     </div>

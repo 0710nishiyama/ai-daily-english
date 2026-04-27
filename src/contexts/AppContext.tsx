@@ -70,6 +70,8 @@ export interface UserSettings {
   monthlyLessonLimit: number;
   /** 選択された音声名（nullの場合は自動選択） */
   selectedVoiceName: string | null;
+  /** 選択されたマイクデバイスID（nullの場合はデフォルト） */
+  selectedMicDeviceId: string | null;
 }
 
 /** アプリケーション全体の状態 */
@@ -125,6 +127,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   difficultyLevel: 'beginner',
   monthlyLessonLimit: 0,
   selectedVoiceName: null,
+  selectedMicDeviceId: null,
 };
 
 function createInitialState(): AppState {
